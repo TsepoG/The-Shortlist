@@ -151,3 +151,20 @@ def test_iter_bulk_companyfacts_yields_each_member(tmp_path: Path) -> None:
     names = [name for name, _ in results]
     assert names == ["CIK0000320193.json", "CIK0000789019.json"]
     assert results[0][1] == {"cik": 320193}
+
+
+def test_iter_bulk_companyfacts_include_filters_before_parsing(tmp_path: Path) -> None:
+    # The excluded member's payload is deliberately invalid JSON-shaped data
+    # that would still decode fine if json.load ran on it — the point is that
+    # `include` must be checked before json.load is ever called, not merely
+    # that the result excludes it.
+    archive_path = tmp_path / "companyfacts.zip"
+    with zipfile.ZipFile(archive_path, "w") as zf:
+        zf.writestr("CIK0000320193.json", json.dumps({"cik": 320193}))
+        zf.writestr("CIK0000789019.json", json.dumps({"cik": 789019}))
+
+    results = list(
+        iter_bulk_companyfacts(archive_path, include=lambda name: name == "CIK0000320193.json")
+    )
+
+    assert [name for name, _ in results] == ["CIK0000320193.json"]

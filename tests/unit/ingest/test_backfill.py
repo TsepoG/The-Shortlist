@@ -91,6 +91,22 @@ def test_backfill_ingests_only_in_scope_companies(tmp_path: Path) -> None:
     assert writer.batches[0][0].cik == Cik.parse("0000320193")
 
 
+def test_backfill_never_parses_out_of_scope_members(tmp_path: Path) -> None:
+    # The out-of-scope member's payload is deliberately invalid JSON — proving
+    # scope filtering happens before json.load is ever called on a member,
+    # not merely that its facts are discarded afterward. A naive
+    # "parse everything, filter after" implementation would raise here.
+    archive = tmp_path / "companyfacts.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("CIK0000320193.json", json.dumps(_apple_companyfacts()))
+        zf.writestr("CIK0000789019.json", "{not valid json at all")
+    writer = FakeFactWriter()
+
+    summary = run_backfill(archive, [Cik.parse("0000320193")], writer)
+
+    assert summary.companies_processed == 1
+
+
 def test_backfill_summary_counts_inserted_facts(tmp_path: Path) -> None:
     archive = tmp_path / "companyfacts.zip"
     _write_archive(archive, {"CIK0000320193.json": _apple_companyfacts()})

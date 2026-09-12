@@ -3,6 +3,7 @@
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 
 from shortlist.ingest.qa.report import write_report
@@ -12,6 +13,11 @@ from shortlist.ingest.qa.report import write_report
 class _Row:
     name: str
     value: int
+
+
+@dataclass(frozen=True, slots=True)
+class _MoneyRow:
+    amount: Decimal
 
 
 def test_write_report_creates_json_and_markdown(tmp_path: Path) -> None:
@@ -51,6 +57,24 @@ def test_write_report_serializes_dates(tmp_path: Path) -> None:
 
     parsed = json.loads((directory / "report.json").read_text(encoding="utf-8"))
     assert parsed == {"as_of": "2015-03-01"}
+
+
+def test_write_report_serializes_decimal_as_string_not_float(tmp_path: Path) -> None:
+    # CLAUDE.md: "Explicit Decimal for money and ratios ... never float
+    # equality." Money-shaped fields (a reconciliation violation's dollar
+    # amounts, a coverage cell's fraction) are Decimal, and this must
+    # round-trip as an exact string, never a lossy float.
+    directory = write_report(
+        "my_job",
+        summary_markdown="",
+        data=[_MoneyRow(Decimal("1000000000.005"))],
+        reports_root=tmp_path,
+    )
+
+    raw = (directory / "report.json").read_text(encoding="utf-8")
+    parsed = json.loads(raw)
+    assert parsed == [{"amount": "1000000000.005"}]
+    assert isinstance(parsed[0]["amount"], str)
 
 
 def test_write_report_uses_timestamped_directory(tmp_path: Path) -> None:

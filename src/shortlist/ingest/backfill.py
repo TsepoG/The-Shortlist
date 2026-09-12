@@ -111,8 +111,13 @@ def run_backfill(
 def _iter_in_scope_parsed_facts(
     archive_path: Path, scope: set[Cik]
 ) -> Iterable[tuple[Cik, ParseResult]]:
-    for name, payload in iter_bulk_companyfacts(archive_path):
+    def _in_scope(name: str) -> bool:
         cik = cik_from_member_name(name)
-        if cik is None or cik not in scope:
-            continue
+        return cik is not None and cik in scope
+
+    for name, payload in iter_bulk_companyfacts(archive_path, include=_in_scope):
+        # cik_from_member_name(name) cannot be None here: _in_scope already
+        # required it to parse successfully before json.load ever ran.
+        cik = cik_from_member_name(name)
+        assert cik is not None
         yield cik, parse_companyfacts(cik, payload)

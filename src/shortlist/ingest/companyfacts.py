@@ -28,10 +28,10 @@ from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, cast
 
 from shortlist.data.types import CanonicalConcept, Cik, Fact, Unit
-from shortlist.ingest.concepts import concept_for_tag, expected_unit
+from shortlist.ingest.concepts import concept_for_tag, expected_unit, resolve_first_available
 from shortlist.ingest.derive import derive_gross_profit
 
 # XBRL unit keys as they appear in companyfacts JSON, mapped to our Unit enum.
@@ -123,17 +123,65 @@ def parse_companyfacts(cik: Cik, payload: dict[str, Any]) -> ParseResult:
     verbatim it will not, since alias namespaces are `us-gaap`/`dei` only, so
     every custom-namespace observation always lands in `unmapped_tags`, per
     PHASE_1.md §3: "Custom extension tags ... are not silently mapped."
+
+    Two passes: first group every observation that resolves to a concept by
+    `(concept, period_start, period_end, accession_number)`, since PHASE_1.md
+    §3's "try each in order, take the first that yields a value for the
+    period" needs to see every competing alias for one exact period+accession
+    before deciding — deciding tag-by-tag as encountered would let whichever
+    alias happens to load first from the JSON win, not the highest-priority
+    one. Second pass resolves each group via `resolve_first_available` and
+    validates only the winner; every alias that loses is recorded as a
+    rejection, never silently discarded and never written as a second,
+    conflicting `Fact` left for the database to arbitrate.
     """
     acc = _Accumulator()
     facts_by_namespace = payload.get("facts", {})
+
+    _CandidateKey = tuple[CanonicalConcept, object, object, object]
+    _Candidate = tuple[str, dict[str, Any]]  # (xbrl_unit, obs)
+    candidates: dict[_CandidateKey, dict[tuple[str, str], _Candidate]] = {}
 
     for namespace, tags in facts_by_namespace.items():
         for tag, tag_body in tags.items():
             concept = concept_for_tag(namespace, tag)
             units = tag_body.get("units", {})
+            if concept is None:
+                for observations in units.values():
+                    acc.unmapped_counts[(namespace, tag)] += len(observations)
+                continue
             for xbrl_unit, observations in units.items():
                 for obs in observations:
-                    _parse_observation(acc, cik, namespace, tag, concept, xbrl_unit, obs)
+                    key: _CandidateKey = (
+                        concept,
+                        obs.get("start"),
+                        obs.get("end"),
+                        obs.get("accn"),
+                    )
+                    candidates.setdefault(key, {})[(namespace, tag)] = (xbrl_unit, obs)
+
+    for (concept, _start, _end, _accn), by_alias in candidates.items():
+        # dict's invariance means `by_alias` (value type `_Candidate`) isn't
+        # directly assignable to resolve_first_available's `dict[..., object]`
+        # parameter, and its return value is typed as `object` for the same
+        # reason — rebuild as a plain object-valued dict and cast back.
+        available: dict[tuple[str, str], object] = dict(by_alias)
+        chosen = resolve_first_available(concept, available)
+        assert chosen is not None  # every group has at least one candidate by construction
+        chosen_alias, chosen_value = chosen
+        chosen_unit, chosen_obs = cast(_Candidate, chosen_value)
+        for (namespace, tag), _candidate in by_alias.items():
+            if (namespace, tag) == (chosen_alias.namespace, chosen_alias.tag):
+                continue
+            acc.reject(
+                namespace,
+                tag,
+                "shadowed_by_higher_priority_alias",
+                f"concept={concept.value!r} superseded_by={chosen_alias.tag!r}",
+            )
+        _parse_observation(
+            acc, cik, chosen_alias.namespace, chosen_alias.tag, concept, chosen_unit, chosen_obs
+        )
 
     _derive_missing_gross_profit(acc)
 

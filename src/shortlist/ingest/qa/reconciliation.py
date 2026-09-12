@@ -17,6 +17,17 @@ Checks implemented, exactly the three PHASE_1.md §6 authorizes for phase 1:
   Adding either without the missing pieces would mean inventing a check the
   spec didn't ask for, which CLAUDE.md's "do not invent" section rules out.)
 
+**Known limitation of the balance-sheet check**, found running the real phase 1
+backfill: `assets == liabilities + equity` can show an expected, non-defect
+"violation" for a company with material noncontrolling interest or
+temporary/mezzanine equity — neither `minority_interest` nor `temporary_equity`
+is among phase 1's 16 canonical concepts, and CLAUDE.md's "do not invent"
+section rules out adding a concept mapping without being asked. Confirmed
+against real filings: NVDA's balance sheet includes a
+`TemporaryEquityValueExcludingAdditionalPaidInCapital` line that is neither
+`total_liabilities` nor `stockholders_equity`, so this check reports a
+violation there that is not a data defect. See `docs/phases/PHASE_1_NOTES.md`.
+
 Tolerance, per §6: relative 0.5% or absolute $1,000,000, whichever is larger.
 """
 
@@ -31,6 +42,17 @@ from shortlist.data.types import CanonicalConcept, Cik, Fact
 
 RELATIVE_TOLERANCE = Decimal("0.005")
 ABSOLUTE_TOLERANCE = Decimal("1000000")
+
+_BALANCE_SHEET_CONCEPTS = (
+    CanonicalConcept.TOTAL_ASSETS,
+    CanonicalConcept.TOTAL_LIABILITIES,
+    CanonicalConcept.STOCKHOLDERS_EQUITY,
+)
+_GROSS_MARGIN_CONCEPTS = (
+    CanonicalConcept.REVENUE,
+    CanonicalConcept.COST_OF_REVENUE,
+    CanonicalConcept.GROSS_PROFIT,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,21 +119,76 @@ def _check_gross_margin_identity(
     )
 
 
-def reconcile(facts: Sequence[Fact]) -> tuple[ReconciliationViolation, ...]:
-    """Run every reconciliation check over `facts`, grouped by (cik, period_end).
+def _latest_self_consistent_bundle(
+    facts: Sequence[Fact], needed: tuple[CanonicalConcept, ...]
+) -> Mapping[CanonicalConcept, Fact] | None:
+    """Among the accessions that report every concept in `needed` **together**
+    for this period, return the bundle from the most-recently-filed one (ties
+    broken by `accession_number` descending) — the same same-accession-only
+    reasoning `derive.py` already uses for `gross_profit`, so a check never
+    compares figures that no single filing ever asserted together.
 
-    `facts` should be the already-resolved, as-of-a-date latest fact per
-    (cik, concept, period_end) — this function does no as-of filtering itself;
-    that is the caller's job via the guarded `FactRepository`.
+    This matters because a company's later filing can re-report *one*
+    concept for an older comparative period (e.g. a restated
+    `stockholders_equity`) without re-reporting the others for that same
+    period — collapsing each concept to its own independently-latest fact
+    would then pair that restated figure against stale, unrelated
+    assets/liabilities from an earlier filing. Confirmed against real data:
+    this is exactly what happened for a Microsoft comparative period before
+    this fix.
     """
-    by_period: dict[tuple[Cik, date], dict[CanonicalConcept, Fact]] = {}
+    by_accession: dict[str, dict[CanonicalConcept, Fact]] = {}
+    for f in facts:
+        if f.concept in needed:
+            by_accession.setdefault(f.accession_number, {})[f.concept] = f
+
+    complete = {
+        accession: bundle
+        for accession, bundle in by_accession.items()
+        if set(bundle) >= set(needed)
+    }
+    if not complete:
+        return None
+    _best_accession, best_bundle = max(
+        complete.items(), key=lambda kv: (next(iter(kv[1].values())).filed_date, kv[0])
+    )
+    return best_bundle
+
+
+def reconcile(facts: Sequence[Fact]) -> tuple[ReconciliationViolation, ...]:
+    """Run every reconciliation check over `facts`, grouped by
+    (cik, period_start, period_end); within each period, each check selects
+    its own same-accession bundle via `_latest_self_consistent_bundle`.
+
+    `period_start` is part of the grouping key, not just `period_end`: a
+    single 10-K reports both the full-year and the Q4 figure for the same
+    concept with an identical `period_end`, differing only in `period_start`
+    (`None` for the FY duration or a balance-sheet instant, an earlier date
+    for the Q4 duration). Grouping on `period_end` alone would mix FY revenue
+    with Q4 cost-of-revenue — the same collision `PHASE_1_NOTES.md` §0.1
+    already fixed in the unique constraint. Balance-sheet instants all carry
+    `period_start IS NULL`, so they still group together correctly.
+
+    `facts` should be every as-of-a-date visible fact for the universe —
+    restatements and superseded values included, **not** pre-collapsed to one
+    fact per concept. This function does no as-of filtering itself; that is
+    the caller's job via the guarded `FactRepository`.
+    """
+    by_period: dict[tuple[Cik, date | None, date], list[Fact]] = {}
     for fact in facts:
-        by_period.setdefault((fact.cik, fact.period_end), {})[fact.concept] = fact
+        key = (fact.cik, fact.period_start, fact.period_end)
+        by_period.setdefault(key, []).append(fact)
 
     violations: list[ReconciliationViolation] = []
-    for (cik, period_end), by_concept in by_period.items():
-        for check in (_check_balance_sheet_identity, _check_gross_margin_identity):
-            violation = check(cik, period_end, by_concept)
+    for (cik, _period_start, period_end), period_facts in by_period.items():
+        for check, needed in (
+            (_check_balance_sheet_identity, _BALANCE_SHEET_CONCEPTS),
+            (_check_gross_margin_identity, _GROSS_MARGIN_CONCEPTS),
+        ):
+            bundle = _latest_self_consistent_bundle(period_facts, needed)
+            if bundle is None:
+                continue
+            violation = check(cik, period_end, bundle)
             if violation is not None:
                 violations.append(violation)
 

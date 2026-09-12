@@ -10,8 +10,15 @@ this file to run.
 import pytest
 import sqlalchemy as sa
 
-from shortlist.data.factory import Backend, create_fact_repository, create_repositories
+from shortlist.data._backends.postgres import PostgresFactWriter
+from shortlist.data.factory import (
+    Backend,
+    create_fact_repository,
+    create_fact_writer,
+    create_repositories,
+)
 from shortlist.data.guard import GuardedFactRepository
+from shortlist.ingest.backfill import FactWriter
 
 
 def test_create_repositories_postgres_still_not_implemented_pending_prices() -> None:
@@ -27,3 +34,15 @@ def test_create_fact_repository_postgres_returns_guarded_instance() -> None:
     repo = create_fact_repository(Backend.POSTGRES, bind=engine)
 
     assert isinstance(repo, GuardedFactRepository)
+
+
+def test_create_fact_writer_postgres_returns_a_writer() -> None:
+    # Same never-connected-Engine idiom as above — no DB, no network.
+    engine = sa.create_engine("postgresql+psycopg://unused:unused@localhost/unused")
+
+    writer = create_fact_writer(Backend.POSTGRES, bind=engine)
+
+    assert isinstance(writer, PostgresFactWriter)
+    # Structural conformance to backfill.py's FactWriter Protocol — this is
+    # the contract callers actually depend on, not the concrete class.
+    assert isinstance(writer, FactWriter)

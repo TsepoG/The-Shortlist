@@ -71,6 +71,85 @@ def test_resolves_non_primary_alias_still_yields_a_value() -> None:
     assert result.facts[0].raw_tag == "SalesRevenueGoodsNet"
 
 
+def test_two_aliases_for_one_period_and_accession_resolve_by_priority_not_json_order() -> None:
+    # Regression test for a real bug found running the phase 1 backfill:
+    # PHASE_1.md §3 says alias resolution should "try each in order, take the
+    # first that yields a value" — but the parser used to emit a Fact for
+    # every matching alias unconditionally, letting the database's insert
+    # order (not alias priority) decide which one survived. "Revenues" is
+    # higher-priority than "SalesRevenueNet" in the revenue chain; both are
+    # given for the exact same period and accession here, with the
+    # lower-priority tag listed FIRST in the payload so a JSON-order-dependent
+    # bug would pick the wrong one.
+    payload: dict[str, Any] = {
+        "facts": {
+            "us-gaap": {
+                "SalesRevenueNet": {
+                    "units": {"USD": [_obs(end="2014-12-31", val=999, start="2014-01-01")]}
+                },
+                "Revenues": {
+                    "units": {"USD": [_obs(end="2014-12-31", val=1000, start="2014-01-01")]}
+                },
+            }
+        }
+    }
+
+    result = parse_companyfacts(CIK, payload)
+
+    assert len(result.facts) == 1
+    assert result.facts[0].raw_tag == "Revenues"
+    assert result.facts[0].value == Decimal("1000")
+
+    shadowed = [r for r in result.rejections if r.reason == "shadowed_by_higher_priority_alias"]
+    assert len(shadowed) == 1
+    assert shadowed[0].tag == "SalesRevenueNet"
+
+
+def test_two_aliases_for_different_periods_both_yield_facts() -> None:
+    # The exclusivity above is scoped to one exact (period, accession) — a
+    # company using "Revenues" in one filing and "SalesRevenueNet" in another
+    # (the normal case this alias chain exists for) must still get both.
+    payload: dict[str, Any] = {
+        "facts": {
+            "us-gaap": {
+                "Revenues": {
+                    "units": {
+                        "USD": [
+                            _obs(
+                                end="2013-12-31",
+                                val=900,
+                                start="2013-01-01",
+                                filed="2014-02-15",
+                                accn="0000320193-14-000001",
+                            )
+                        ]
+                    }
+                },
+                "SalesRevenueNet": {
+                    "units": {
+                        "USD": [
+                            _obs(
+                                end="2014-12-31",
+                                val=1000,
+                                start="2014-01-01",
+                                filed="2015-02-15",
+                                accn="0000320193-15-000001",
+                            )
+                        ]
+                    }
+                },
+            }
+        }
+    }
+
+    result = parse_companyfacts(CIK, payload)
+
+    assert len(result.facts) == 2
+    raw_tags = {f.raw_tag for f in result.facts}
+    assert raw_tags == {"Revenues", "SalesRevenueNet"}
+    assert not any(r.reason == "shadowed_by_higher_priority_alias" for r in result.rejections)
+
+
 def test_record_missing_filed_is_dropped_not_defaulted() -> None:
     payload = _payload(
         "us-gaap",

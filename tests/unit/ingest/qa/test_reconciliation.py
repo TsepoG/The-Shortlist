@@ -100,6 +100,106 @@ def test_outside_absolute_tolerance_on_small_values_is_flagged() -> None:
     assert len(violations) == 1
 
 
+def test_fy_and_q4_figures_sharing_a_period_end_are_not_mixed() -> None:
+    # A single 10-K reports both the full-year and the Q4 figure for the same
+    # concept, with the same period_end but different period_start (FY:
+    # 2014-01-01, Q4: 2014-10-01). Grouping by period_end alone would let the
+    # Q4 revenue collide with the FY cost_of_revenue below and either mask a
+    # real violation or fabricate a fake one.
+    fy_revenue = fact(
+        cik=CIK,
+        concept=CanonicalConcept.REVENUE,
+        value=Decimal("4000000000"),
+        period_start="2014-01-01",
+        period_end=PERIOD_END,
+        filed_date="2015-02-15",
+    )
+    fy_cost = fact(
+        cik=CIK,
+        concept=CanonicalConcept.COST_OF_REVENUE,
+        value=Decimal("1500000000"),
+        period_start="2014-01-01",
+        period_end=PERIOD_END,
+        filed_date="2015-02-15",
+    )
+    fy_gross_profit = fact(
+        cik=CIK,
+        concept=CanonicalConcept.GROSS_PROFIT,
+        value=Decimal("2500000000"),  # 4B - 1.5B: correct for the FY period
+        period_start="2014-01-01",
+        period_end=PERIOD_END,
+        filed_date="2015-02-15",
+    )
+    # Q4-only revenue, same period_end, different period_start — deliberately
+    # NOT consistent with fy_cost/fy_gross_profit if ever mixed with them.
+    q4_revenue = fact(
+        cik=CIK,
+        concept=CanonicalConcept.REVENUE,
+        value=Decimal("1100000000"),
+        period_start="2014-10-01",
+        period_end=PERIOD_END,
+        filed_date="2015-02-15",
+    )
+
+    violations = reconcile([fy_revenue, fy_cost, fy_gross_profit, q4_revenue])
+
+    assert violations == ()
+
+
+def test_restatement_of_one_concept_alone_does_not_create_a_false_violation() -> None:
+    # Regression test for a real bug found running the phase 1 backfill: a
+    # LATER filing restates only stockholders_equity for an older comparative
+    # period, without re-reporting assets/liabilities for that same period.
+    # Collapsing each concept to its own independently-latest fact would then
+    # pair the restated equity against the OLDER filing's assets/liabilities —
+    # two figures no single document ever asserted together. The fix: each
+    # check picks the latest ACCESSION that reports every needed concept
+    # TOGETHER, skipping an accession that reports only a subset.
+    original_filing = [
+        fact(
+            cik=CIK,
+            concept=CanonicalConcept.TOTAL_ASSETS,
+            value=Decimal("5000000000"),
+            period_end=PERIOD_END,
+            filed_date="2015-02-15",
+            accession_number="original",
+        ),
+        fact(
+            cik=CIK,
+            concept=CanonicalConcept.TOTAL_LIABILITIES,
+            value=Decimal("3000000000"),
+            period_end=PERIOD_END,
+            filed_date="2015-02-15",
+            accession_number="original",
+        ),
+        fact(
+            cik=CIK,
+            concept=CanonicalConcept.STOCKHOLDERS_EQUITY,
+            value=Decimal("2000000000"),
+            period_end=PERIOD_END,
+            filed_date="2015-02-15",
+            accession_number="original",
+        ),
+    ]
+    # A much later filing restates ONLY equity for this same comparative
+    # period, to a value that would NOT balance against the original
+    # assets/liabilities if naively combined with them.
+    later_partial_restatement = [
+        fact(
+            cik=CIK,
+            concept=CanonicalConcept.STOCKHOLDERS_EQUITY,
+            value=Decimal("2500000000"),
+            period_end=PERIOD_END,
+            filed_date="2018-08-03",
+            accession_number="later-restatement",
+        ),
+    ]
+
+    violations = reconcile(original_filing + later_partial_restatement)
+
+    assert violations == ()
+
+
 def test_violations_grouped_independently_per_company_and_period() -> None:
     other_cik = Cik.parse("0000000002")
     facts = [

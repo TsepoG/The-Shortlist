@@ -11,12 +11,20 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, is_dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 
 DEFAULT_REPORTS_ROOT = Path("reports")
 
 
 def _default_json(value: object) -> object:
+    if isinstance(value, Decimal):
+        # str, not float: CLAUDE.md's "explicit Decimal for money and ratios
+        # ... never float equality" applies to report artifacts too — a
+        # reconciliation violation's dollar amounts and a coverage cell's
+        # fraction are both Decimal, and str is the only conversion here that
+        # doesn't risk losing precision.
+        return str(value)
     if hasattr(value, "isoformat"):
         return value.isoformat()
     if is_dataclass(value) and not isinstance(value, type):

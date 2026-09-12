@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum, auto
+from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
 from sqlalchemy.engine import Connection, Engine
@@ -28,6 +29,13 @@ from sqlalchemy.engine import Connection, Engine
 from shortlist.config import database_url
 from shortlist.data.guard import GuardedFactRepository, GuardedPriceRepository
 from shortlist.data.repository import FactRepository, PriceReader, PriceRepository
+
+if TYPE_CHECKING:
+    # Type-only: shortlist.data must not depend on shortlist.ingest at runtime
+    # (the data layer sits below ingestion — DESIGN.md §2's layering), but
+    # create_fact_writer's return type still needs to be checkable against
+    # what backfill.py's structural Protocol requires.
+    from shortlist.ingest.backfill import FactWriter
 
 
 class Backend(Enum):
@@ -75,6 +83,32 @@ def create_fact_repository(
 
         engine_or_connection = bind if bind is not None else sa.create_engine(database_url())
         return wrap_fact_repository(PostgresFactRepository(engine_or_connection))
+    raise AssertionError(f"Unhandled backend: {backend!r}")  # pragma: no cover
+
+
+def create_fact_writer(
+    backend: Backend,
+    *,
+    bind: Engine | Connection | None = None,
+) -> FactWriter:
+    """Construct the fact writer for `backend` (ingestion's append path).
+
+    Deliberately **not** guarded and **not** part of `FactRepository` or any
+    read protocol — the guard constrains what reads may return and has
+    nothing to say about an honest write of a fact's true `filed_date`
+    (see `docs/phases/PHASE_1_NOTES.md` §9). Typed against
+    `shortlist.ingest.backfill.FactWriter` (a `@runtime_checkable` Protocol,
+    imported only under `TYPE_CHECKING`) so callers get real type-checking
+    without this module depending on `shortlist.ingest` at runtime, and so
+    `shortlist.data` still exports no concrete repository/writer
+    implementation by name — callers never import
+    `shortlist.data._backends.postgres` directly.
+    """
+    if backend is Backend.POSTGRES:
+        from shortlist.data._backends.postgres import PostgresFactWriter
+
+        engine_or_connection = bind if bind is not None else sa.create_engine(database_url())
+        return PostgresFactWriter(engine_or_connection)
     raise AssertionError(f"Unhandled backend: {backend!r}")  # pragma: no cover
 
 

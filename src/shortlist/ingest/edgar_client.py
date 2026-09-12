@@ -15,7 +15,7 @@ around.
 from __future__ import annotations
 
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -28,8 +28,12 @@ COMPANY_FACTS_URL_TEMPLATE = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik
 COMPANY_CONCEPT_URL_TEMPLATE = (
     "https://data.sec.gov/api/xbrl/companyconcept/CIK{cik}/{namespace}/{tag}.json"
 )
+# Verified 2026-09-12: this is the path that serves the archive (200,
+# application/zip, ~1.31 GiB). PHASE_1.md §1 originally listed
+# ".../daily-index/bulkdata/companyfacts.zip", which returns 503 with an HTML
+# error page — corrected in that doc too rather than worked around here.
 BULK_COMPANYFACTS_ARCHIVE_URL = (
-    "https://www.sec.gov/Archives/edgar/daily-index/bulkdata/companyfacts.zip"
+    "https://www.sec.gov/Archives/edgar/daily-index/xbrl/companyfacts.zip"
 )
 
 _MAX_REQUESTS_PER_SECOND = 10
@@ -120,9 +124,19 @@ class EdgarClient:
         return destination
 
 
-def iter_bulk_companyfacts(archive_path: Path) -> Iterator[tuple[str, dict[str, Any]]]:
+def iter_bulk_companyfacts(
+    archive_path: Path,
+    *,
+    include: Callable[[str], bool] | None = None,
+) -> Iterator[tuple[str, dict[str, Any]]]:
     """Stream `(filename, parsed_json)` pairs out of a downloaded bulk archive,
     one company at a time — never the whole ~18k-file archive in memory at once.
+
+    `include`, if given, is checked against the member filename **before**
+    `json.load` — the real archive has ~18 GiB of uncompressed JSON across
+    ~20k members, so a caller that only wants a handful of companies (e.g.
+    `backfill.py`'s scope filter) should pass a predicate here rather than
+    filtering after every member has already been parsed.
     """
     import json
     import zipfile
@@ -130,6 +144,8 @@ def iter_bulk_companyfacts(archive_path: Path) -> Iterator[tuple[str, dict[str, 
     with zipfile.ZipFile(archive_path) as archive:
         for name in archive.namelist():
             if not name.endswith(".json"):
+                continue
+            if include is not None and not include(name):
                 continue
             with archive.open(name) as member:
                 yield name, json.load(member)

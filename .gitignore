@@ -16,6 +16,7 @@ build/
 # "Do not commit API keys, data dumps, or .env").
 /reports/
 *.zip
+/data/
 docs/
 .claude/
 CLAUDE.md

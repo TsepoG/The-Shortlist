@@ -202,13 +202,25 @@ class PostgresFactWriter:
         for start in range(0, len(facts), _INSERT_BATCH_SIZE):
             batch = facts[start : start + _INSERT_BATCH_SIZE]
             rows = [_fact_to_row(f) for f in batch]
-            stmt = pg_insert(fundamental_facts).values(rows)
-            stmt = stmt.on_conflict_do_nothing(constraint=UNIQUE_CONSTRAINT_NAME)
+            # `.returning(...)` and counting the rows actually returned, not
+            # `result.rowcount`: confirmed by direct reproduction that
+            # psycopg3 reports rowcount as -1 ("cannot be determined") for
+            # this exact multi-row VALUES + ON CONFLICT DO NOTHING pattern,
+            # unconditionally — including when some or all rows in the batch
+            # are genuinely new. The write itself was always correct; only
+            # that count was ever wrong. A conflicted row contributes no
+            # RETURNING row, so this count is exact.
+            stmt = (
+                pg_insert(fundamental_facts)
+                .values(rows)
+                .on_conflict_do_nothing(constraint=UNIQUE_CONSTRAINT_NAME)
+                .returning(fundamental_facts.c.id)
+            )
             if isinstance(self._bind, Connection):
                 result = self._bind.execute(stmt)
             else:
                 with self._bind.begin() as conn:
                     result = conn.execute(stmt)
-            total_inserted += result.rowcount
+            total_inserted += len(result.fetchall())
 
         return InsertResult(inserted=total_inserted, skipped=len(facts) - total_inserted)
