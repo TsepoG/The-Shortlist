@@ -13,13 +13,15 @@
 # PHASE_1.md §4: "Do not trust the CIKs listed here; resolve them from
 # company_tickers.json and confirm." Nothing in this file is a CIK.
 #
-# Known limitation, not yet resolved: company_tickers.json appears to list only
-# currently-registered tickers, so the four delisted/acquired candidates below
-# (XLNX, MXIM, CY, MLNX) may not resolve through it. src/shortlist/ingest/scope.py
-# raises a clear, named error rather than silently dropping an unresolved
-# ticker — if that happens, the fix is a manual CIK override at load time
-# (resolved and confirmed by hand from EDGAR's own company search), not a
-# guess baked into this file.
+# Resolved: confirmed against the live company_tickers.json (2026-09-12) that
+# it lists only currently-registered tickers, so the four delisted/acquired
+# candidates below (XLNX, MXIM, CY, MLNX) do not resolve through it — as
+# predicted, and with no surprises among the other five. Each of the four now
+# has a hand-verified CIK override (from SEC's own company search and
+# companyfacts, never a guess) in PHASE_1_CIK_OVERRIDES
+# (src/shortlist/ingest/scope.py), which load_scope() applies by default. See
+# docs/phases/PHASE_1_NOTES.md §2 for the full verification record. Nothing in
+# this file is a CIK.
 #
 # Seeded with PHASE_1.md §4's named fixture candidates only. No company has
 # been added here beyond what §4 already names — see docs/phases/PHASE_1_NOTES.md

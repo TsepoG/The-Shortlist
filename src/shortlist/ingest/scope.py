@@ -15,14 +15,27 @@ from pathlib import Path
 from shortlist.data.types import Cik
 from shortlist.ingest.tickers import TickerDirectory
 
+PHASE_1_CIK_OVERRIDES: Mapping[str, Cik] = {
+    # Hand-verified 2026-09-12 against SEC's own endpoints only — EDGAR company
+    # search / full-text search for the CIK, then that CIK's companyfacts
+    # entityName and a revenue figure to confirm it is the right company. Each
+    # one's filed_date range also terminates at its acquisition. See
+    # docs/phases/PHASE_1_NOTES.md §2 for the full verification record.
+    "XLNX": Cik.parse(743988),  # XILINX, INC. — acquired by AMD, 2022
+    "MXIM": Cik.parse(743316),  # MAXIM INTEGRATED PRODUCTS, INC. — ADI, 2021
+    "CY": Cik.parse(791915),  # Cypress Semiconductor Corporation — Infineon, 2020
+    "MLNX": Cik.parse(1356104),  # Mellanox Technologies, Ltd. — Nvidia, 2020
+}
+
 
 class UnresolvedTickerError(RuntimeError):
     """A scope-file ticker did not resolve via `company_tickers.json`.
 
     Most often this means the ticker belongs to a delisted or acquired company
     that the current tickers file no longer lists — see the scope file's own
-    header comment. The fix is a manual, hand-verified CIK override, supplied
-    via `overrides` — never a guess baked into the loader.
+    header comment. The fix is a manual, hand-verified CIK override, added to
+    `PHASE_1_CIK_OVERRIDES` (or supplied ad hoc via the `overrides` argument)
+    — never a guess baked into the loader.
     """
 
     def __init__(self, ticker: str) -> None:
@@ -64,9 +77,11 @@ def load_scope(
 
     `overrides` supplies a hand-verified CIK for a ticker that
     `company_tickers.json` doesn't resolve (typically a delisted company) —
-    see `UnresolvedTickerError`.
+    see `UnresolvedTickerError`. Defaults to `PHASE_1_CIK_OVERRIDES`; pass an
+    explicit mapping (including `{}`) to replace that default rather than add
+    to it.
     """
-    overrides = overrides or {}
+    overrides = PHASE_1_CIK_OVERRIDES if overrides is None else overrides
     tickers = parse_scope_tickers(path.read_text(encoding="utf-8"))
 
     ciks: list[Cik] = []

@@ -13,7 +13,10 @@ import httpx
 import pytest
 
 from shortlist.config import MissingConfigError
-from shortlist.ingest.edgar_client import EdgarClient, iter_bulk_companyfacts
+from shortlist.data.types import Cik
+from shortlist.ingest.edgar_client import COMPANY_TICKERS_URL, EdgarClient, iter_bulk_companyfacts
+from shortlist.ingest.scope import load_scope, parse_scope_tickers
+from shortlist.ingest.tickers import TickerDirectory, parse_company_tickers
 
 
 @pytest.fixture(autouse=True)
@@ -99,6 +102,41 @@ def test_get_company_facts_builds_correct_url() -> None:
         client.get_company_facts("0000320193")
 
     assert seen_urls == ["https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json"]
+
+
+def test_get_company_tickers_builds_correct_url() -> None:
+    seen_urls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_urls.append(str(request.url))
+        return httpx.Response(200, json={})
+
+    with EdgarClient(transport=httpx.MockTransport(handler)) as client:
+        client.get_company_tickers()
+
+    assert seen_urls == [COMPANY_TICKERS_URL]
+
+
+def test_get_company_tickers_feeds_scope_resolution_end_to_end(tmp_path: Path) -> None:
+    # The full chain this client exists to support: EdgarClient.get_company_tickers()
+    # -> parse_company_tickers -> TickerDirectory -> load_scope, all through a
+    # MockTransport rather than a live company_tickers.json fetch.
+    payload = {
+        "0": {"cik_str": 320193, "ticker": "AAPL", "title": "Apple Inc."},
+        "1": {"cik_str": 789019, "ticker": "MSFT", "title": "MICROSOFT CORP"},
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    scope_file = tmp_path / "scope.txt"
+    scope_file.write_text("AAPL\nMSFT\n")
+
+    with EdgarClient(transport=httpx.MockTransport(handler)) as client:
+        directory = TickerDirectory(parse_company_tickers(client.get_company_tickers()))
+
+    assert parse_scope_tickers(scope_file.read_text()) == ("AAPL", "MSFT")
+    assert load_scope(scope_file, directory) == (Cik.parse(320193), Cik.parse(789019))
 
 
 def test_iter_bulk_companyfacts_yields_each_member(tmp_path: Path) -> None:
