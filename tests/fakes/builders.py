@@ -43,6 +43,7 @@ def fact(
     fiscal_period: str = "FY",
     form: str = "10-K",
     accession_number: str | None = None,
+    is_derived: bool = False,
 ) -> Fact:
     """Build a `Fact` tersely, with sensible defaults for everything not central
     to the point-in-time behaviour under test.
@@ -68,6 +69,7 @@ def fact(
             if accession_number is not None
             else _default_accession_number(resolved_cik, resolved_period_end, resolved_filed_date)
         ),
+        is_derived=is_derived,
     )
 
 

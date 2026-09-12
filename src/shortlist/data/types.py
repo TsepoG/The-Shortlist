@@ -102,6 +102,10 @@ class Fact:
     """One row of `fundamental_facts`: a single (company, concept, period, filing)
     observation. Append-only — restatements are new rows with a later `filed_date`,
     never mutations of an existing row.
+
+    `is_derived` is True for a fact computed from other facts (e.g. `gross_profit`
+    derived from `revenue - cost_of_revenue`) rather than tagged directly by the
+    filer. See `docs/phases/PHASE_1.md` §3 and `src/shortlist/ingest/derive.py`.
     """
 
     cik: Cik
@@ -116,6 +120,7 @@ class Fact:
     form: str
     filed_date: dt.date
     accession_number: str
+    is_derived: bool = False
 
 
 @dataclass(frozen=True, slots=True)

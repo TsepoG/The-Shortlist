@@ -11,6 +11,11 @@ htmlcov/
 *.egg-info/
 dist/
 build/
+
+# Data quality reports and downloaded archives — never committed (CLAUDE.md:
+# "Do not commit API keys, data dumps, or .env").
+/reports/
+*.zip
 docs/
 .claude/
 CLAUDE.md
