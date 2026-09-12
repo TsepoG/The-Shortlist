@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Lint, type-check, test
+    runs-on: ubuntu-latest
+
+    # A Postgres service is provisioned unconditionally from phase 0 onward so
+    # this workflow does not need editing when phase 1's integration tests
+    # (which need a real database) land. Unit tests ignore it entirely.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: shortlist
+          POSTGRES_PASSWORD: shortlist
+          POSTGRES_DB: shortlist_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U shortlist"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://shortlist:shortlist@localhost:5432/shortlist_test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      # Reports only — never auto-fixes in CI. Fixing is a local `ruff check --fix` step.
+      - name: Lint (ruff check)
+        run: uv run ruff check .
+
+      - name: Format check (ruff format)
+        run: uv run ruff format --check .
+
+      - name: Type check (mypy --strict)
+        run: uv run mypy --strict src tests
+
+      # Skipped until alembic/ exists (phase 1+). hashFiles returns "" for a
+      # missing path, so this step is a no-op on phase 0 without editing.
+      - name: Run migrations
+        if: hashFiles('alembic/**') != ''
+        run: uv run alembic upgrade head
+
+      - name: Run tests with coverage
+        run: uv run pytest --cov=shortlist --cov-report=term-missing --cov-report=xml
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+
+  tag:
+    name: Tag release
+    needs: check
+    # Only after a merge lands on main, never on a PR — a PR run stops at `check`.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Bumps major/minor/patch based on Conventional Commit prefixes
+      # (feat: -> minor, fix: -> patch, "BREAKING CHANGE" -> major) found in
+      # commit messages since the last tag, and pushes the new tag.
+      - name: Bump version and push tag
+        id: tag_version
+        uses: mathieudutour/github-tag-action@v6.2
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          default_bump: patch
+
+      - name: Create GitHub release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.tag_version.outputs.new_tag }}
+          release_name: ${{ steps.tag_version.outputs.new_tag }}
+          body: ${{ steps.tag_version.outputs.changelog }}
