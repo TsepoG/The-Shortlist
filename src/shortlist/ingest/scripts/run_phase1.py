@@ -39,7 +39,7 @@ from shortlist.ingest.qa.coverage import (
     cells_below_threshold,
     compute_coverage,
 )
-from shortlist.ingest.qa.reconciliation import ReconciliationViolation, reconcile
+from shortlist.ingest.qa.reconciliation import CheckOutcome, CheckStatus, audit_identities
 from shortlist.ingest.qa.report import DEFAULT_REPORTS_ROOT, write_report
 from shortlist.ingest.qa.unmapped_tags import write_unmapped_tags_report
 from shortlist.ingest.scope import load_scope
@@ -221,12 +221,45 @@ def _render_coverage_markdown(cells: Sequence[CoverageCell], below: Sequence[Cov
     return "\n".join(lines) + "\n"
 
 
-def _render_reconciliation_markdown(violations: Sequence[ReconciliationViolation]) -> str:
+def _render_reconciliation_markdown(outcomes: Sequence[CheckOutcome]) -> str:
+    verified = [o for o in outcomes if o.status is CheckStatus.VERIFIED]
+    not_independent = [o for o in outcomes if o.status is CheckStatus.NOT_INDEPENDENT]
+    violations = [o for o in outcomes if o.status is CheckStatus.VIOLATION]
+
     lines = ["# Reconciliation", ""]
+    lines.append(
+        f"{len(verified)} verified, {len(not_independent)} not independently verified "
+        f"(derived input), {len(violations)} violation(s)."
+    )
+    lines.append("")
+    lines.append(
+        "A **not independently verified** outcome means the check holds but at "
+        "least one of its inputs is a derived fact (e.g. `total_liabilities` "
+        "derived as `LiabilitiesAndStockholdersEquity - stockholders_equity`, or "
+        "`gross_profit` derived as `revenue - cost_of_revenue`) — confirmed that "
+        "`LiabilitiesAndStockholdersEquity == Assets` for every candidate period "
+        "in this universe, so the balance-sheet identity then holds by "
+        "construction, not because the filing's numbers were independently "
+        "confirmed. See `reconciliation.py`'s module docstring."
+    )
+    lines.append("")
+
+    if not_independent:
+        lines.append("## Not independently verified, by company")
+        lines.append("")
+        lines.append("| cik | check | count |")
+        lines.append("|---|---|---|")
+        by_cik_check: dict[tuple[str, str], int] = {}
+        for o in not_independent:
+            by_cik_check[(str(o.cik), o.check)] = by_cik_check.get((str(o.cik), o.check), 0) + 1
+        for (cik, check), count in sorted(by_cik_check.items()):
+            lines.append(f"| {cik} | {check} | {count} |")
+        lines.append("")
+
     if not violations:
         lines.append("No violations.")
         return "\n".join(lines) + "\n"
-    lines.append(f"{len(violations)} violation(s).")
+    lines.append(f"## Violations ({len(violations)})")
     lines.append("")
     lines.append("| cik | period_end | check | expected | actual | difference |")
     lines.append("|---|---|---|---|---|---|")
@@ -257,18 +290,23 @@ def _run_qa(as_of: AsOfDate) -> int:
         },
     )
 
-    # reconcile() does its own same-accession bundle selection per check —
-    # it must see every visible fact (restatements included), not a
+    # audit_identities() does its own same-accession bundle selection per
+    # check — it must see every visible fact (restatements included), not a
     # pre-collapsed one-per-concept view. See reconciliation.py.
-    violations = reconcile(facts_all)
+    outcomes = audit_identities(facts_all)
+    violations = [o for o in outcomes if o.status is CheckStatus.VIOLATION]
+    not_independent = [o for o in outcomes if o.status is CheckStatus.NOT_INDEPENDENT]
     reconciliation_dir = write_report(
         "reconciliation",
-        summary_markdown=_render_reconciliation_markdown(violations),
-        data={"as_of": as_of.value, "violations": list(violations)},
+        summary_markdown=_render_reconciliation_markdown(outcomes),
+        data={"as_of": as_of.value, "outcomes": list(outcomes)},
     )
 
     print(f"Coverage report written to {coverage_dir} ({len(below_threshold)} below threshold)")
-    print(f"Reconciliation report written to {reconciliation_dir} ({len(violations)} violation(s))")
+    print(
+        f"Reconciliation report written to {reconciliation_dir} "
+        f"({len(violations)} violation(s), {len(not_independent)} not independently verified)"
+    )
     return 0
 
 

@@ -6,7 +6,7 @@ returns, walks every observation under every namespace/tag/unit this module's
 alias chains (`concepts.py`) claim, and produces:
 
 - `facts`: successfully parsed and normalized `Fact` rows (including derived
-  `gross_profit` rows, added by the caller — see `derive.py`)
+  `gross_profit` and `total_liabilities` rows — see `derive.py`)
 - `unmapped_tags`: every (namespace, tag) this parser saw but no alias chain
   claimed, with a frequency count — the raw material for PHASE_1.md §6's
   unmapped-tag report
@@ -25,6 +25,7 @@ from raw input.
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal, InvalidOperation
@@ -32,7 +33,13 @@ from typing import Any, cast
 
 from shortlist.data.types import CanonicalConcept, Cik, Fact, Unit
 from shortlist.ingest.concepts import concept_for_tag, expected_unit, resolve_first_available
-from shortlist.ingest.derive import derive_gross_profit
+from shortlist.ingest.derive import (
+    LIABILITIES_AND_EQUITY_TAG,
+    BalanceSheetTotal,
+    derive_gross_profit,
+    derive_total_liabilities,
+    is_other_equity_component_tag,
+)
 
 # XBRL unit keys as they appear in companyfacts JSON, mapped to our Unit enum.
 # companyfacts uses these unit strings verbatim; TESTING.md §1.3: "USD vs
@@ -142,13 +149,47 @@ def parse_companyfacts(cik: Cik, payload: dict[str, Any]) -> ParseResult:
     _Candidate = tuple[str, dict[str, Any]]  # (xbrl_unit, obs)
     candidates: dict[_CandidateKey, dict[tuple[str, str], _Candidate]] = {}
 
+    # Support observations for `_derive_missing_total_liabilities`, collected
+    # alongside the main walk below. Neither ever becomes a `Fact` or a
+    # rejection — see `derive.py`'s `BalanceSheetTotal` docstring for why
+    # `LiabilitiesAndStockholdersEquity` in particular must never be stored as
+    # a canonical concept.
+    _SupportKey = tuple[str, date | None, date]
+    liabilities_and_equity_by_key: dict[_SupportKey, dict[str, Any]] = {}
+    other_equity_totals: dict[_SupportKey, Decimal] = {}
+
     for namespace, tags in facts_by_namespace.items():
         for tag, tag_body in tags.items():
             concept = concept_for_tag(namespace, tag)
             units = tag_body.get("units", {})
             if concept is None:
-                for observations in units.values():
+                for xbrl_unit, observations in units.items():
                     acc.unmapped_counts[(namespace, tag)] += len(observations)
+                    if xbrl_unit != "USD":
+                        continue
+                    is_total_tag = (namespace, tag) == LIABILITIES_AND_EQUITY_TAG
+                    is_other_equity_tag = is_other_equity_component_tag(namespace, tag)
+                    if not (is_total_tag or is_other_equity_tag):
+                        continue
+                    for obs in observations:
+                        end = _parse_date(obs.get("end"))
+                        accession_number = obs.get("accn")
+                        if end is None or not accession_number:
+                            continue
+                        support_key: _SupportKey = (
+                            str(accession_number),
+                            _parse_date(obs.get("start")),
+                            end,
+                        )
+                        if is_total_tag:
+                            liabilities_and_equity_by_key[support_key] = obs
+                        else:
+                            value = _parse_decimal(obs.get("val"))
+                            if value is None:
+                                continue
+                            other_equity_totals[support_key] = (
+                                other_equity_totals.get(support_key, Decimal(0)) + value
+                            )
                 continue
             for xbrl_unit, observations in units.items():
                 for obs in observations:
@@ -184,6 +225,10 @@ def parse_companyfacts(cik: Cik, payload: dict[str, Any]) -> ParseResult:
         )
 
     _derive_missing_gross_profit(acc)
+    # Runs after gross_profit and reads only acc.facts's already-resolved
+    # total_liabilities/stockholders_equity — a derived liability can never
+    # itself become an input to another derivation.
+    _derive_missing_total_liabilities(acc, liabilities_and_equity_by_key, other_equity_totals)
 
     return acc.result()
 
@@ -300,6 +345,53 @@ def _derive_missing_gross_profit(acc: _Accumulator) -> None:
         if revenue is None or cost_of_revenue is None:
             continue
         derived_fact = derive_gross_profit(revenue, cost_of_revenue)
+        if derived_fact is not None:
+            derived.append(derived_fact)
+
+    acc.facts.extend(derived)
+
+
+def _derive_missing_total_liabilities(
+    acc: _Accumulator,
+    liabilities_and_equity_by_key: Mapping[tuple[str, date | None, date], dict[str, Any]],
+    other_equity_totals: Mapping[tuple[str, date | None, date], Decimal],
+) -> None:
+    """Derive total_liabilities for every (accession, period) that has
+    stockholders_equity and a `LiabilitiesAndStockholdersEquity` total but no
+    explicitly tagged Liabilities — as-filed always wins, so a period that
+    already resolved a tagged Liabilities is skipped. Silently produces no
+    fact (never a rejection) when the inputs don't line up, mirroring
+    `_derive_missing_gross_profit`'s handling of an absent input.
+    """
+    by_key: dict[tuple[str, date | None, date], dict[CanonicalConcept, Fact]] = {}
+    for f in acc.facts:
+        if f.concept not in (
+            CanonicalConcept.TOTAL_LIABILITIES,
+            CanonicalConcept.STOCKHOLDERS_EQUITY,
+        ):
+            continue
+        key = (f.accession_number, f.period_start, f.period_end)
+        by_key.setdefault(key, {})[f.concept] = f
+
+    derived: list[Fact] = []
+    for support_key, total_obs in liabilities_and_equity_by_key.items():
+        concepts_present = by_key.get(support_key, {})
+        if CanonicalConcept.TOTAL_LIABILITIES in concepts_present:
+            continue  # as-filed already present; never overridden by a derivation
+        equity = concepts_present.get(CanonicalConcept.STOCKHOLDERS_EQUITY)
+        if equity is None:
+            continue
+        total_value = _parse_decimal(total_obs.get("val"))
+        if total_value is None:
+            continue
+        total = BalanceSheetTotal(
+            value=total_value,
+            period_start=support_key[1],
+            period_end=support_key[2],
+            accession_number=support_key[0],
+            other_equity_components=other_equity_totals.get(support_key, Decimal(0)),
+        )
+        derived_fact = derive_total_liabilities(total, equity)
         if derived_fact is not None:
             derived.append(derived_fact)
 

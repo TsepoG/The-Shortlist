@@ -348,6 +348,145 @@ def test_no_gross_profit_derived_when_cost_of_revenue_absent() -> None:
     assert all(f.concept is not CanonicalConcept.GROSS_PROFIT for f in result.facts)
 
 
+def _balance_sheet_payload(
+    *,
+    equity_val: object = 300,
+    lse_val: object = 1000,
+    liabilities_val: object | None = None,
+    other_equity: dict[str, object] | None = None,
+    end: str = "2014-12-31",
+    accn: str = "0000320193-15-000001",
+) -> dict[str, Any]:
+    tags: dict[str, Any] = {
+        "StockholdersEquity": {
+            "units": {"USD": [_obs(end=end, val=equity_val, start=None, accn=accn)]}
+        },
+        "LiabilitiesAndStockholdersEquity": {
+            "units": {"USD": [_obs(end=end, val=lse_val, start=None, accn=accn)]}
+        },
+    }
+    if liabilities_val is not None:
+        tags["Liabilities"] = {
+            "units": {"USD": [_obs(end=end, val=liabilities_val, start=None, accn=accn)]}
+        }
+    for tag, val in (other_equity or {}).items():
+        tags[tag] = {"units": {"USD": [_obs(end=end, val=val, start=None, accn=accn)]}}
+    return {"facts": {"us-gaap": tags}}
+
+
+def test_derives_total_liabilities_when_absent() -> None:
+    payload = _balance_sheet_payload(equity_val=300, lse_val=1000)
+
+    result = parse_companyfacts(CIK, payload)
+
+    derived = [f for f in result.facts if f.concept is CanonicalConcept.TOTAL_LIABILITIES]
+    assert len(derived) == 1
+    assert derived[0].is_derived is True
+    assert derived[0].value == Decimal("700")
+
+
+def test_as_filed_liabilities_is_not_overridden_by_derivation() -> None:
+    payload = _balance_sheet_payload(equity_val=300, lse_val=1000, liabilities_val=650)
+
+    result = parse_companyfacts(CIK, payload)
+
+    liabilities = [f for f in result.facts if f.concept is CanonicalConcept.TOTAL_LIABILITIES]
+    assert len(liabilities) == 1
+    assert liabilities[0].is_derived is False
+    assert liabilities[0].value == Decimal("650")  # as-filed, not 1000-300=700
+
+
+def test_no_total_liabilities_derived_when_stockholders_equity_absent() -> None:
+    payload = {
+        "facts": {
+            "us-gaap": {
+                "LiabilitiesAndStockholdersEquity": {
+                    "units": {"USD": [_obs(end="2014-12-31", val=1000, start=None)]}
+                },
+            }
+        }
+    }
+
+    result = parse_companyfacts(CIK, payload)
+
+    assert all(f.concept is not CanonicalConcept.TOTAL_LIABILITIES for f in result.facts)
+
+
+def test_no_total_liabilities_derived_when_minority_interest_present() -> None:
+    # Regression test for a real risk found while planning this derivation:
+    # AMD's alias chain resolves parent-only StockholdersEquity, so naively
+    # subtracting it from LiabilitiesAndStockholdersEquity would silently fold
+    # a nonzero MinorityInterest into "liabilities" — confirmed against real
+    # AMD data to be off by 12.8% at one period. Must refuse to derive instead.
+    payload = _balance_sheet_payload(
+        equity_val=300, lse_val=1000, other_equity={"MinorityInterest": 50}
+    )
+
+    result = parse_companyfacts(CIK, payload)
+
+    assert all(f.concept is not CanonicalConcept.TOTAL_LIABILITIES for f in result.facts)
+
+
+def test_no_total_liabilities_derived_when_temporary_equity_present() -> None:
+    payload = _balance_sheet_payload(
+        equity_val=300,
+        lse_val=1000,
+        other_equity={"TemporaryEquityCarryingAmountAttributableToParent": 20},
+    )
+
+    result = parse_companyfacts(CIK, payload)
+
+    assert all(f.concept is not CanonicalConcept.TOTAL_LIABILITIES for f in result.facts)
+
+
+def test_total_liabilities_derived_when_other_equity_component_is_zero() -> None:
+    payload = _balance_sheet_payload(
+        equity_val=300, lse_val=1000, other_equity={"MinorityInterest": 0}
+    )
+
+    result = parse_companyfacts(CIK, payload)
+
+    derived = [f for f in result.facts if f.concept is CanonicalConcept.TOTAL_LIABILITIES]
+    assert len(derived) == 1
+    assert derived[0].value == Decimal("700")
+
+
+def test_liabilities_and_stockholders_equity_is_never_emitted_as_a_fact() -> None:
+    # LiabilitiesAndStockholdersEquity is a derivation input, not an alias for
+    # any canonical concept (it equals Assets, not total_liabilities) — it
+    # must never itself become a stored Fact.
+    payload = _balance_sheet_payload(equity_val=300, lse_val=1000)
+
+    result = parse_companyfacts(CIK, payload)
+
+    assert all(f.raw_tag != "LiabilitiesAndStockholdersEquity" for f in result.facts)
+
+
+def test_liabilities_and_stockholders_equity_is_still_counted_as_unmapped() -> None:
+    # It is genuinely unclaimed by any alias chain — the unmapped-tags report
+    # must still see it (annotated separately as a derivation input, not a
+    # missing alias — see qa/unmapped_tags.py), so its count is not silently
+    # dropped just because this module also consumes its value.
+    payload = _balance_sheet_payload(equity_val=300, lse_val=1000)
+
+    result = parse_companyfacts(CIK, payload)
+
+    lse_unmapped = [t for t in result.unmapped_tags if t.tag == "LiabilitiesAndStockholdersEquity"]
+    assert len(lse_unmapped) == 1
+    assert lse_unmapped[0].count == 1
+
+
+def test_minority_interest_is_still_counted_as_unmapped() -> None:
+    payload = _balance_sheet_payload(
+        equity_val=300, lse_val=1000, other_equity={"MinorityInterest": 50}
+    )
+
+    result = parse_companyfacts(CIK, payload)
+
+    mi_unmapped = [t for t in result.unmapped_tags if t.tag == "MinorityInterest"]
+    assert len(mi_unmapped) == 1
+
+
 def test_all_parsed_facts_carry_the_given_cik() -> None:
     payload = _payload("us-gaap", "Assets", "USD", _obs(end="2014-12-31", val=1))
     result = parse_companyfacts(CIK, payload)

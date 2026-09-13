@@ -3,20 +3,21 @@
 from decimal import Decimal
 
 from shortlist.data.types import CanonicalConcept, Cik, Fact
-from shortlist.ingest.qa.reconciliation import reconcile
+from shortlist.ingest.qa.reconciliation import CheckStatus, audit_identities, reconcile
 from tests.fakes.builders import fact
 
 CIK = Cik.parse("0000000001")
 PERIOD_END = "2014-12-31"
 
 
-def _f(concept: CanonicalConcept, value: Decimal | int) -> Fact:
+def _f(concept: CanonicalConcept, value: Decimal | int, *, is_derived: bool = False) -> Fact:
     return fact(
         cik=CIK,
         concept=concept,
         value=value,
         period_end=PERIOD_END,
         filed_date="2015-02-15",
+        is_derived=is_derived,
     )
 
 
@@ -252,3 +253,97 @@ def test_violations_grouped_independently_per_company_and_period() -> None:
 
     assert len(violations) == 1
     assert violations[0].cik == other_cik
+
+
+# --- audit_identities: VERIFIED / NOT_INDEPENDENT / VIOLATION ----------------
+
+
+def test_balance_sheet_identity_with_all_direct_inputs_is_verified() -> None:
+    facts = [
+        _f(CanonicalConcept.TOTAL_ASSETS, 1000),
+        _f(CanonicalConcept.TOTAL_LIABILITIES, 600),
+        _f(CanonicalConcept.STOCKHOLDERS_EQUITY, 400),
+    ]
+
+    outcomes = audit_identities(facts)
+
+    assert len(outcomes) == 1
+    assert outcomes[0].status is CheckStatus.VERIFIED
+    assert outcomes[0].derived_inputs == ()
+
+
+def test_balance_sheet_identity_with_derived_liabilities_is_not_independent() -> None:
+    # Confirmed against real data: LiabilitiesAndStockholdersEquity == Assets
+    # in every candidate case, so a derived total_liabilities makes this
+    # check hold by construction — never real confirmation.
+    facts = [
+        _f(CanonicalConcept.TOTAL_ASSETS, 1000),
+        _f(CanonicalConcept.TOTAL_LIABILITIES, 600, is_derived=True),
+        _f(CanonicalConcept.STOCKHOLDERS_EQUITY, 400),
+    ]
+
+    outcomes = audit_identities(facts)
+
+    assert len(outcomes) == 1
+    assert outcomes[0].status is CheckStatus.NOT_INDEPENDENT
+    assert outcomes[0].derived_inputs == (CanonicalConcept.TOTAL_LIABILITIES,)
+
+
+def test_gross_margin_identity_with_derived_gross_profit_is_not_independent() -> None:
+    facts = [
+        _f(CanonicalConcept.REVENUE, 1000),
+        _f(CanonicalConcept.COST_OF_REVENUE, 400),
+        _f(CanonicalConcept.GROSS_PROFIT, 600, is_derived=True),
+    ]
+
+    outcomes = audit_identities(facts)
+
+    assert len(outcomes) == 1
+    assert outcomes[0].status is CheckStatus.NOT_INDEPENDENT
+    assert outcomes[0].derived_inputs == (CanonicalConcept.GROSS_PROFIT,)
+
+
+def test_violation_status_wins_even_with_a_derived_input() -> None:
+    # A derived input doesn't downgrade a real violation to a soft pass — an
+    # outside-tolerance gap is still VIOLATION regardless of derivation.
+    facts = [
+        _f(CanonicalConcept.TOTAL_ASSETS, Decimal("5000000000")),
+        _f(CanonicalConcept.TOTAL_LIABILITIES, Decimal("3000000000"), is_derived=True),
+        _f(CanonicalConcept.STOCKHOLDERS_EQUITY, Decimal("1000000000")),  # sums to 4B, not 5B
+    ]
+
+    outcomes = audit_identities(facts)
+
+    assert len(outcomes) == 1
+    assert outcomes[0].status is CheckStatus.VIOLATION
+
+
+def test_reconcile_excludes_not_independent_outcomes() -> None:
+    # reconcile() only ever reports violations — a NOT_INDEPENDENT (tautological
+    # pass) is not a violation and must not appear.
+    facts = [
+        _f(CanonicalConcept.TOTAL_ASSETS, 1000),
+        _f(CanonicalConcept.TOTAL_LIABILITIES, 600, is_derived=True),
+        _f(CanonicalConcept.STOCKHOLDERS_EQUITY, 400),
+    ]
+
+    assert reconcile(facts) == ()
+
+
+def test_audit_identities_reports_both_checks_for_one_complete_period() -> None:
+    facts = [
+        _f(CanonicalConcept.TOTAL_ASSETS, 1000),
+        _f(CanonicalConcept.TOTAL_LIABILITIES, 600),
+        _f(CanonicalConcept.STOCKHOLDERS_EQUITY, 400),
+        _f(CanonicalConcept.REVENUE, 1000),
+        _f(CanonicalConcept.COST_OF_REVENUE, 400),
+        _f(CanonicalConcept.GROSS_PROFIT, 600),
+    ]
+
+    outcomes = audit_identities(facts)
+
+    assert {o.check for o in outcomes} == {
+        "assets_equal_liabilities_plus_equity",
+        "revenue_minus_cost_of_revenue_equals_gross_profit",
+    }
+    assert all(o.status is CheckStatus.VERIFIED for o in outcomes)

@@ -5,6 +5,13 @@ The counting itself already happens during parsing (`companyfacts.py`'s
 module only turns that into the report artifact and the ranking PHASE_1.md §6
 asks for: "Every raw tag encountered that no alias chain claimed, ranked by
 frequency ... the primary input for extending the alias lists."
+
+A tag in `derive.DERIVATION_INPUT_TAGS` (e.g.
+`LiabilitiesAndStockholdersEquity`) is genuinely unclaimed by any alias chain,
+so its count stays truthful here — but it is *consumed* by a derivation
+(`derive.py`), not simply missing an alias, so `render_markdown` annotates it
+rather than leaving it to read as an untriaged gap in "the primary input for
+extending the alias lists."
 """
 
 from __future__ import annotations
@@ -12,6 +19,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from shortlist.ingest.companyfacts import UnmappedTag
+from shortlist.ingest.derive import DERIVATION_INPUT_TAGS
 from shortlist.ingest.qa.report import write_report
 
 # A tag seen at least this often is worth triaging first — PHASE_1.md §6: "a
@@ -44,7 +52,12 @@ def render_markdown(tags: Sequence[UnmappedTag]) -> str:
     lines.append("| namespace | tag | count |")
     lines.append("|---|---|---|")
     for t in tags:
-        lines.append(f"| {t.namespace} | {t.tag} | {t.count} |")
+        note = (
+            " (consumed as a derivation input — not a missing alias)"
+            if (t.namespace, t.tag) in DERIVATION_INPUT_TAGS
+            else ""
+        )
+        lines.append(f"| {t.namespace} | {t.tag}{note} | {t.count} |")
     return "\n".join(lines) + "\n"
 
 

@@ -28,3 +28,19 @@ def test_render_markdown_includes_every_tag() -> None:
     assert "Foo" in markdown
     assert "Bar" in markdown
     assert "acme" in markdown
+
+
+def test_render_markdown_annotates_derivation_input_tags() -> None:
+    # LiabilitiesAndStockholdersEquity is genuinely unclaimed by any alias
+    # chain (still counted, per the test above), but it's consumed by
+    # derive.py's total_liabilities derivation rather than simply missing an
+    # alias — the report must say so rather than presenting it as untriaged.
+    tags = [
+        UnmappedTag("us-gaap", "LiabilitiesAndStockholdersEquity", count=1026),
+        UnmappedTag("us-gaap", "ResearchAndDevelopmentExpense", count=50),
+    ]
+
+    markdown = render_markdown(tags)
+
+    assert "LiabilitiesAndStockholdersEquity (consumed as a derivation input" in markdown
+    assert "ResearchAndDevelopmentExpense (consumed" not in markdown
