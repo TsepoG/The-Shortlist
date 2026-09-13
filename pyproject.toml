@@ -5,7 +5,13 @@ description = "A sector fundamental screener and historical backtester."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "Proprietary" }
-dependencies = []
+dependencies = [
+    "sqlalchemy>=2.0",
+    "psycopg[binary]>=3.2",
+    "alembic>=1.13",
+    "httpx>=0.27",
+    "python-dotenv>=1.0",
+]
 
 [dependency-groups]
 dev = [
@@ -25,7 +31,10 @@ packages = ["src/shortlist"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-addopts = "--strict-markers --strict-config --cov=shortlist.data --cov-report=term-missing"
+addopts = "--strict-markers --strict-config --cov=shortlist --cov-report=term-missing"
+markers = [
+    "integration: requires a real Postgres database (DATABASE_URL); skipped locally if unreachable, required to pass in CI",
+]
 
 [tool.mypy]
 strict = true
@@ -44,9 +53,11 @@ select = ["E", "F", "I", "UP", "B", "SIM", "ANN", "RUF"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["ANN001", "ANN201", "ANN202"]
+"alembic/**" = ["ANN001", "ANN201", "ANN202", "I001"]
 
 [tool.coverage.run]
-source = ["shortlist.data"]
+source = ["shortlist"]
+omit = ["src/shortlist/ingest/scripts/*"]
 
 [tool.coverage.report]
 show_missing = true

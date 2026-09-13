@@ -1,0 +1,52 @@
+# Phase 1 ingestion scope — a scaffold, not a sector definition.
+#
+# DESIGN.md §3.3 is explicit that sector membership is a curated, time-aware
+# editorial artifact (`sector_membership`, phase 3) and that SIC codes are too
+# coarse to stand in for it. This file exists only so phase 1's backfill has an
+# explicit, reviewable scope before that curation exists. It is superseded by
+# `sector_membership` in phase 3 and should not be read as a sector definition
+# by any later phase.
+#
+# Format: one ticker per line, optional trailing "# note" comment. Blank lines
+# and full-line comments are ignored. Tickers are resolved to CIKs at load time
+# against company_tickers.json (src/shortlist/ingest/tickers.py) — see
+# PHASE_1.md §4: "Do not trust the CIKs listed here; resolve them from
+# company_tickers.json and confirm." Nothing in this file is a CIK.
+#
+# Resolved: confirmed against the live company_tickers.json (2026-09-12) that
+# it lists only currently-registered tickers, so the four delisted/acquired
+# candidates below (XLNX, MXIM, CY, MLNX) do not resolve through it — as
+# predicted, and with no surprises among the other five. Each of the four now
+# has a hand-verified CIK override (from SEC's own company search and
+# companyfacts, never a guess) in PHASE_1_CIK_OVERRIDES
+# (src/shortlist/ingest/scope.py), which load_scope() applies by default. See
+# docs/phases/PHASE_1_NOTES.md §2 for the full verification record. Nothing in
+# this file is a CIK.
+#
+# Seeded with PHASE_1.md §4's named fixture candidates only. No company has
+# been added here beyond what §4 already names — see docs/phases/PHASE_1_NOTES.md
+# for the open question on which additional semiconductor names to add for a
+# real backfill run.
+
+# Mega-cap, clean tagging / non-December fiscal year
+AAPL   # FY ends late September
+
+# Non-December fiscal year
+MSFT   # FY ends June 30
+
+# Non-December fiscal year, unusual FY labeling
+NVDA   # FY ends late January
+
+# Semis mega-cap, calendar FY — clean baseline for the seed sector
+TXN
+
+# Negative-earnings period candidate
+AMD
+
+# Delisted / acquired — all four §4 candidates included; hand-verification later
+# narrows which one or two become golden fixtures. Ingesting all four is
+# harmless; only the golden-fixture *choice* is the "pick one or two" step.
+XLNX   # Xilinx, acquired by AMD
+MXIM   # Maxim Integrated, acquired by Analog Devices
+CY     # Cypress Semiconductor, acquired by Infineon
+MLNX   # Mellanox, acquired by Nvidia

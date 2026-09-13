@@ -34,7 +34,9 @@ jobs:
           --health-retries 5
 
     env:
-      DATABASE_URL: postgresql://shortlist:shortlist@localhost:5432/shortlist_test
+      # +psycopg (psycopg3), not bare postgresql:// — SQLAlchemy defaults a
+      # driver-less URL to psycopg2, which phase 1 does not install.
+      DATABASE_URL: postgresql+psycopg://shortlist:shortlist@localhost:5432/shortlist_test
 
     steps:
       - name: Checkout

@@ -16,6 +16,8 @@ from shortlist.data.guard import (
     LookAheadError,
 )
 from shortlist.data.types import AsOfDate, CanonicalConcept, Cik
+from tests.contract import fact_repository_contract as contract
+from tests.fakes import guarded_fact_repo
 from tests.fakes.builders import bar, fact
 from tests.fakes.leaking_repository import LeakingFactRepository, LeakingPriceRepository
 from tests.fakes.memory_repository import InMemoryFactRepository, InMemoryPriceRepository
@@ -96,34 +98,10 @@ def test_guard_rejects_untyped_as_of() -> None:
 
 
 def test_get_facts_for_universe_filters_by_asof() -> None:
-    other_cik = Cik.parse("0000000002")
-    guarded = wrap_fact_repository(
-        InMemoryFactRepository(
-            [
-                fact(
-                    cik=CIK,
-                    concept=CanonicalConcept.REVENUE,
-                    value=100,
-                    period_end="2014-12-31",
-                    filed_date="2015-02-15",
-                ),
-                fact(
-                    cik=other_cik,
-                    concept=CanonicalConcept.REVENUE,
-                    value=200,
-                    period_end="2014-12-31",
-                    filed_date="2015-06-01",
-                ),
-            ]
-        )
-    )
-
-    result = guarded.get_facts_for_universe(
-        [CIK, other_cik], [CanonicalConcept.REVENUE], AsOfDate.parse("2015-03-01")
-    )
-
-    assert len(result) == 1
-    assert result[0].cik == CIK
+    # Delegates to the shared contract (tests/contract/fact_repository_contract.py)
+    # so this scenario also runs against PostgresFactRepository in
+    # tests/integration/ — see PHASE_1.md §7.
+    contract.get_facts_for_universe_filters_by_asof(guarded_fact_repo)
 
 
 def test_get_bars_raises_when_end_exceeds_asof() -> None:

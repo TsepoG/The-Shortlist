@@ -9,6 +9,8 @@ unguarded repository is not obtainable through this module; see `factory.py`.
 from shortlist.data.factory import (
     Backend,
     RepositoryBundle,
+    create_fact_repository,
+    create_fact_writer,
     create_repositories,
     wrap_fact_repository,
     wrap_price_repository,
@@ -37,6 +39,8 @@ __all__ = [
     "PriceRepository",
     "RepositoryBundle",
     "Unit",
+    "create_fact_repository",
+    "create_fact_writer",
     "create_repositories",
     "wrap_fact_repository",
     "wrap_price_repository",
