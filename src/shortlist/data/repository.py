@@ -98,5 +98,11 @@ class PriceReader(PriceRepository, Protocol):
         as_of: AsOfDate,
         window_days: int,
     ) -> Decimal | None:
-        """Max `adj_close` in the inclusive window ending at `as_of`."""
+        """Max `adj_high` in the inclusive window ending at `as_of`.
+
+        Intraday basis, decided in phase 2 against real data
+        (`docs/phases/PHASE_2_NOTES.md` §4); phase 0 originally used
+        `adj_close` because `adj_high` didn't exist yet — see `PHASE_0.md`
+        §6.5 for the as-built decision.
+        """
         ...

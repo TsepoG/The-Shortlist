@@ -49,6 +49,38 @@ class LookAheadError(RuntimeError):
         super().__init__(message)
 
 
+class AmbiguousTickerError(RuntimeError):
+    """A ticker-keyed price query matched more than one CIK.
+
+    PHASE_2.md §0.1's chosen resolution keeps `PriceRepository`/`PriceReader`
+    ticker-keyed rather than reopening phase 0's interface, on the reasoning
+    that ticker-recycling is an ingestion-time attribution problem, not
+    something a differently-keyed read protocol would prevent on its own. This
+    error is the other half of that reasoning: if ingestion-time attribution
+    ever *is* wrong — two CIKs' rows sharing one ticker in the store — a
+    ticker-keyed read must not silently blend them into one continuous series.
+    Like `LookAheadError`, this is a bug signal, never something to catch and
+    continue past.
+
+    Raised by a backend (`PostgresPriceRepository`), not by the guard itself —
+    `PriceBar` carries no `cik` field for the guard to inspect, so only a
+    backend with access to its own raw storage can detect this. Defined here
+    rather than in the backend module because it belongs to the same category
+    of data-layer invariant violation as `LookAheadError`.
+    """
+
+    def __init__(self, *, ticker: str, ciks: Sequence[str]) -> None:
+        self.ticker = ticker
+        self.ciks = tuple(ciks)
+        super().__init__(
+            f"Ticker {ticker!r} matched more than one CIK in storage: "
+            f"{', '.join(sorted(self.ciks))}. A ticker-keyed query cannot "
+            "safely return bars for more than one company — this indicates a "
+            "ticker-recycling case that ingestion-time attribution failed to "
+            "separate, not a query bug to work around here."
+        )
+
+
 def _require_as_of(as_of: AsOfDate, method: str) -> None:
     if not isinstance(as_of, AsOfDate):
         raise TypeError(
@@ -178,14 +210,19 @@ class GuardedPriceRepository:
         as_of: AsOfDate,
         window_days: int,
     ) -> Decimal | None:
-        """The maximum `adj_close` in the inclusive window ending at `as_of`.
+        """The maximum `adj_high` in the inclusive window ending at `as_of`.
 
         Derived from `get_bars`, so it goes through the same enforcement — a
-        backend cannot leak a post-`as_of` high through this path even if it tries.
+        backend cannot leak a post-`as_of` high through this path even if it
+        tries. Intraday basis (`adj_high`), not closing basis (`adj_close`):
+        `PHASE_0_NOTES.md` Q7 deliberately left this open until real data
+        existed to decide from; phase 2 gathered that evidence
+        (`docs/phases/PHASE_2_NOTES.md` §4) and switched to intraday basis —
+        see `PHASE_0.md` §6.5 for the as-built decision.
         """
         _require_as_of(as_of, "get_trailing_high")
         start = as_of.value - dt.timedelta(days=window_days)
         bars = self.get_bars(ticker, start, as_of.value, as_of)
         if not bars:
             return None
-        return max(bar.adj_close for bar in bars)
+        return max(bar.adj_high for bar in bars)

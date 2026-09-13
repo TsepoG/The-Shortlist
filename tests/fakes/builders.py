@@ -82,17 +82,27 @@ def bar(
     high: Decimal | int | str | None = None,
     low: Decimal | int | str | None = None,
     adj_close: Decimal | int | str | None = None,
+    adj_high: Decimal | int | str | None = None,
     volume: int = 0,
 ) -> PriceBar:
-    """Build a `PriceBar` tersely. Unset OHLC fields default to `close`."""
+    """Build a `PriceBar` tersely. Unset OHLC fields default to `close`.
+
+    `adj_high` defaults to the resolved `high` (itself defaulting to `close`),
+    so a test that only ever passes `close` gets `adj_high == adj_close` —
+    every phase 0 fixture built before `adj_high` existed keeps behaving
+    exactly as before. A test that wants to exercise the intraday basis passes
+    `adj_high` explicitly, above `adj_close`.
+    """
     resolved_close = Decimal(str(close))
+    resolved_high = Decimal(str(high)) if high is not None else resolved_close
     return PriceBar(
         ticker=ticker,
         date=_as_date(date),
         open=Decimal(str(open)) if open is not None else resolved_close,
-        high=Decimal(str(high)) if high is not None else resolved_close,
+        high=resolved_high,
         low=Decimal(str(low)) if low is not None else resolved_close,
         close=resolved_close,
         adj_close=Decimal(str(adj_close)) if adj_close is not None else resolved_close,
+        adj_high=Decimal(str(adj_high)) if adj_high is not None else resolved_high,
         volume=volume,
     )

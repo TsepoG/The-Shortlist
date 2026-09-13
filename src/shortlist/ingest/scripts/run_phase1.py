@@ -42,7 +42,6 @@ from shortlist.ingest.qa.coverage import (
 from shortlist.ingest.qa.reconciliation import CheckOutcome, CheckStatus, audit_identities
 from shortlist.ingest.qa.report import DEFAULT_REPORTS_ROOT, write_report
 from shortlist.ingest.qa.unmapped_tags import write_unmapped_tags_report
-from shortlist.ingest.scope import load_scope
 from shortlist.ingest.scripts.discover_fixtures import (
     CustomTagCandidate,
     FiscalYearChangeCandidate,
@@ -53,41 +52,24 @@ from shortlist.ingest.scripts.discover_fixtures import (
     find_restatement_candidates,
     find_smaller_reporting_company_candidates,
 )
-from shortlist.ingest.tickers import TickerDirectory, parse_company_tickers
+from shortlist.ingest.scripts.scope_common import DATA_DIR, resolve_scope
 
-DATA_DIR = Path("data")
 ARCHIVE_PATH = DATA_DIR / "companyfacts.zip"
 ARCHIVE_PART_PATH = DATA_DIR / "companyfacts.zip.part"
-TICKERS_CACHE_PATH = DATA_DIR / "company_tickers.json"
-SCOPE_PATH = Path("config/ingest_scope_phase1.txt")
 
 _MIN_PLAUSIBLE_ARCHIVE_MEMBERS = 1000  # real archive has ~20k; guards against a tiny/corrupt file
 
 
-# --- Shared: scope resolution, archive caching -------------------------------
-
-
-def _cached_ticker_directory() -> TickerDirectory:
-    """`company_tickers.json`, fetched once and cached to disk. Every later
-    run (qa, discover, or a re-run of backfill) reuses the cache and makes no
-    network call for it at all.
-    """
-    if TICKERS_CACHE_PATH.exists():
-        payload = json.loads(TICKERS_CACHE_PATH.read_text(encoding="utf-8"))
-    else:
-        with EdgarClient() as client:
-            payload = client.get_company_tickers()
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        TICKERS_CACHE_PATH.write_text(json.dumps(payload), encoding="utf-8")
-    return TickerDirectory(parse_company_tickers(payload))
+# --- Shared: archive caching --------------------------------------------------
 
 
 def _resolve_scope() -> tuple[Cik, ...]:
     """The nine phase 1 companies, resolved via `load_scope`'s default
-    overrides — never a re-typed CIK list.
+    overrides — never a re-typed CIK list. Thin wrapper kept so every call
+    site in this module reads the same as before the extraction into
+    `scope_common.py` (shared with `run_phase2.py`).
     """
-    directory = _cached_ticker_directory()
-    return load_scope(SCOPE_PATH, directory)
+    return resolve_scope()
 
 
 def _archive_is_valid(path: Path) -> bool:

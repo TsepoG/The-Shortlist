@@ -10,11 +10,10 @@ not be obtainable by normal application code" (`PHASE_0.md` §4) is enforced:
   unguarded implementation and only ever return a guarded one, so there is no
   direction in which an unguarded instance can escape through this module.
 
-Phase 1 wires `Backend.POSTGRES` to a real `FactRepository`
-(`_backends/postgres.py`). Prices remain unimplemented — `create_repositories`
-(which returns both facts and prices) still raises until phase 2 supplies a price
-backend; `create_fact_repository` is the phase 1 seam for facts alone, so callers
-that only need facts are not blocked on prices existing.
+Phase 1 wired `Backend.POSTGRES` to a real `FactRepository`; phase 2 adds a real
+`PriceReader`/price writer (`_backends/postgres.py`), so `create_repositories`
+now returns both. `create_fact_repository` / `create_price_reader` remain
+available individually for callers that only need one half.
 """
 
 from __future__ import annotations
@@ -36,6 +35,11 @@ if TYPE_CHECKING:
     # create_fact_writer's return type still needs to be checkable against
     # what backfill.py's structural Protocol requires.
     from shortlist.ingest.backfill import FactWriter
+
+    # Same reasoning for prices: PostgresPriceWriter is typed structurally
+    # against this Protocol, defined in the ingestion layer that owns writing
+    # (PHASE_2.md §0.1 / docs/phases/PHASE_2_NOTES.md §0.1).
+    from shortlist.ingest.prices.loader import PriceWriter
 
 
 class Backend(Enum):
@@ -64,6 +68,44 @@ def wrap_price_repository(inner: PriceRepository) -> PriceReader:
     `PriceReader` — which also exposes `get_trailing_high` (see `repository.py`).
     """
     return GuardedPriceRepository(inner)
+
+
+def create_price_reader(
+    backend: Backend,
+    *,
+    bind: Engine | Connection | None = None,
+) -> PriceReader:
+    """Construct just the guarded `PriceReader` for `backend`.
+
+    Mirrors `create_fact_repository` exactly — see that function's docstring
+    for the `bind` seam.
+    """
+    if backend is Backend.POSTGRES:
+        from shortlist.data._backends.postgres import PostgresPriceRepository
+
+        engine_or_connection = bind if bind is not None else sa.create_engine(database_url())
+        return wrap_price_repository(PostgresPriceRepository(engine_or_connection))
+    raise AssertionError(f"Unhandled backend: {backend!r}")  # pragma: no cover
+
+
+def create_price_writer(
+    backend: Backend,
+    *,
+    bind: Engine | Connection | None = None,
+) -> PriceWriter:
+    """Construct the price writer for `backend` (ingestion's upsert path).
+
+    Deliberately **not** guarded and **not** part of `PriceRepository` or any
+    read protocol — mirrors `create_fact_writer`'s reasoning exactly. Typed
+    against `shortlist.ingest.prices.loader.PriceWriter` (a `@runtime_checkable`
+    Protocol, imported only under `TYPE_CHECKING`) for the same layering reason.
+    """
+    if backend is Backend.POSTGRES:
+        from shortlist.data._backends.postgres import PostgresPriceWriter
+
+        engine_or_connection = bind if bind is not None else sa.create_engine(database_url())
+        return PostgresPriceWriter(engine_or_connection)
+    raise AssertionError(f"Unhandled backend: {backend!r}")  # pragma: no cover
 
 
 def create_fact_repository(
@@ -112,18 +154,19 @@ def create_fact_writer(
     raise AssertionError(f"Unhandled backend: {backend!r}")  # pragma: no cover
 
 
-def create_repositories(backend: Backend) -> RepositoryBundle:
-    """Construct the guarded repository bundle for `backend`.
+def create_repositories(
+    backend: Backend,
+    *,
+    bind: Engine | Connection | None = None,
+) -> RepositoryBundle:
+    """Construct the guarded repository bundle (facts + prices) for `backend`.
 
-    Raises until phase 2 supplies a price backend — prices are out of scope for
-    phase 1 (`PHASE_1.md`: "Do not build in this phase: prices..."). Callers that
-    need only facts should use `create_fact_repository` instead of waiting on
-    this to stop raising.
+    `bind` is the same dependency-injection seam as the individual `create_*`
+    functions, passed through to both.
     """
     if backend is Backend.POSTGRES:
-        raise NotImplementedError(
-            "The price backend arrives in phase 2. "
-            "Phase 1 provides create_fact_repository() for facts alone; "
-            "create_repositories() needs both facts and prices."
+        return RepositoryBundle(
+            facts=create_fact_repository(backend, bind=bind),
+            prices=create_price_reader(backend, bind=bind),
         )
     raise AssertionError(f"Unhandled backend: {backend!r}")  # pragma: no cover
