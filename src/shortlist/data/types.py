@@ -125,7 +125,14 @@ class Fact:
 
 @dataclass(frozen=True, slots=True)
 class PriceBar:
-    """One day of adjusted OHLCV for a ticker."""
+    """One day of adjusted OHLCV for a ticker.
+
+    `adj_high` is the intraday high on the same adjustment basis as
+    `adj_close`, and is what `PriceReader.get_trailing_high` maximises — see
+    `PHASE_0.md` §6.5. It was added in phase 2, when the trailing-high basis
+    was decided against real data (`docs/phases/PHASE_2_NOTES.md` §4); phase 0
+    used `adj_close` because no adjusted-high field existed yet.
+    """
 
     ticker: str
     date: dt.date
@@ -134,4 +141,53 @@ class PriceBar:
     low: Decimal
     close: Decimal
     adj_close: Decimal
+    adj_high: Decimal
     volume: int
+
+
+@dataclass(frozen=True, slots=True)
+class PriceRow:
+    """Write-side representation of one price observation.
+
+    Deliberately richer than `PriceBar`: `PriceBar` is the guarded, ticker-only
+    read type phase 0 defined (`PHASE_0.md` §2), while storage needs `cik` (the
+    join key everything above the data layer uses — `DESIGN.md` §3.3) and
+    `source` (which provider produced this row, since two may legitimately
+    disagree — `TESTING.md` §2.3). See `docs/phases/PHASE_2_NOTES.md` §0.1.
+
+    `open`/`high`/`low`/`close` are optional because a real trading session can
+    genuinely lack one (a halt, a provider gap); `adj_close` is required, since
+    it is the one field the dip screen actually reads. `adj_high` is optional
+    and unused until `docs/phases/PHASE_2_NOTES.md` §0.2's trailing-high-basis
+    decision is made. `split_factor_at_ingest` records the cumulative split
+    factor in force when this row was written, so a stale-adjustment-basis mix
+    across a later re-ingestion is detectable rather than merely prevented by
+    the upsert (`PHASE_2_NOTES.md` §0.1).
+    """
+
+    cik: Cik
+    ticker: str
+    source: str
+    date: dt.date
+    open: Decimal | None
+    high: Decimal | None
+    low: Decimal | None
+    close: Decimal | None
+    volume: int | None
+    adj_close: Decimal
+    adj_high: Decimal | None
+    split_factor_at_ingest: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class CorporateActionRow:
+    """One split or dividend, as ingested. See `PriceRow` for why this carries
+    `cik`/`source` that the read-side type does not need to.
+    """
+
+    cik: Cik
+    ticker: str
+    source: str
+    event_date: dt.date
+    event_type: str
+    ratio_or_amount: Decimal

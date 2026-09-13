@@ -11,11 +11,13 @@ from shortlist.data.factory import (
     RepositoryBundle,
     create_fact_repository,
     create_fact_writer,
+    create_price_reader,
+    create_price_writer,
     create_repositories,
     wrap_fact_repository,
     wrap_price_repository,
 )
-from shortlist.data.guard import LookAheadError
+from shortlist.data.guard import AmbiguousTickerError, LookAheadError
 from shortlist.data.repository import FactRepository, PriceReader, PriceRepository
 from shortlist.data.types import (
     AsOfDate,
@@ -27,6 +29,7 @@ from shortlist.data.types import (
 )
 
 __all__ = [
+    "AmbiguousTickerError",
     "AsOfDate",
     "Backend",
     "CanonicalConcept",
@@ -41,6 +44,8 @@ __all__ = [
     "Unit",
     "create_fact_repository",
     "create_fact_writer",
+    "create_price_reader",
+    "create_price_writer",
     "create_repositories",
     "wrap_fact_repository",
     "wrap_price_repository",

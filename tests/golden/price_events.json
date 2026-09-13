@@ -1,0 +1,19 @@
+{
+  "_note": "PHASE_2.md §4.1 requires 'at least one reverse split' and 'at least one large special dividend' among the known-action tests. Neither case exists in the nine phase 1/2 scope companies (config/ingest_scope_phase1.txt) -- all four delisted ones were acquired, not reverse-split. This file is a TEST-ONLY fixture list, deliberately separate from ingestion scope (docs/phases/PHASE_2_NOTES.md's 'Ambiguous / underspecified' #6): neither GE nor COST is ingested by phase 2's backfill. Both events verified live against the price provider's own events feed on 2026-09-13, not assumed.",
+  "reverse_split": {
+    "ticker": "GE",
+    "event_date": "2021-08-02",
+    "description": "General Electric 1-for-8 reverse split",
+    "numerator": "1",
+    "denominator": "8",
+    "ratio_or_amount": "0.125",
+    "verification": "Provider events feed for GE, 2021-08-02: splitRatio '1:8', numerator=1.0, denominator=8.0. Close series confirmed continuous across the date (~$64-66 both sides); no discontinuity."
+  },
+  "special_dividend": {
+    "ticker": "COST",
+    "event_date": "2020-12-01",
+    "description": "Costco special dividend, $10.00/share",
+    "amount": "10.00",
+    "verification": "Provider events feed for COST, 2020-12-01: amount=10.0 -- an order of magnitude above COST's regular ~$0.65-0.70 quarterly dividend in the same feed. Close series confirmed continuous across the date (~$374-391 both sides); no discontinuity."
+  }
+}

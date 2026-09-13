@@ -54,6 +54,26 @@ def sec_user_agent() -> str:
     return value
 
 
+def price_user_agent() -> str:
+    """The `User-Agent` sent on every price-provider request.
+
+    **Not the same category of obligation as `sec_user_agent()`** — see
+    `docs/phases/PHASE_2_NOTES.md` §0.3. SEC *publishes* a policy requiring a
+    contact-bearing User-Agent; the price provider's endpoint is undocumented
+    and states no such requirement. This is required here because the endpoint
+    returns 404 to a bare client (verified), and because contacting a service
+    on sufferance under an identifiable agent is good practice — not because a
+    published term demands it.
+
+    Required with no default all the same: the value is the caller's to supply,
+    not this codebase's to invent.
+    """
+    value = os.environ.get("SHORTLIST_PRICE_USER_AGENT")
+    if not value:
+        raise MissingConfigError("SHORTLIST_PRICE_USER_AGENT")
+    return value
+
+
 def is_ci() -> bool:
     """True when running under CI (GitHub Actions sets `CI=true`).
 
